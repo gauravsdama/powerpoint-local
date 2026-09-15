@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "powerpoint-local"
+version = "0.1.0"
+description = "A local-only MCP server for PowerPoint planning and macOS automation."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+authors = [
+  { name = "Gaurav Dama" }
+]
+dependencies = []
+
+[project.scripts]
+powerpoint-local = "powerpoint_local.server:serve"
+
+[tool.setuptools.packages.find]
+where = ["src"]

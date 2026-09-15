@@ -2,23 +2,35 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import select
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
-MERMAID_NODE = Path("/opt/homebrew/bin/node")
-MERMAID_ENTRY = Path("/Users/gauravsdama/git/mermaid-studio/dist/mcp/index.js")
-MERMAID_GATEWAY = "http://127.0.0.1:8787"
+DEFAULT_MERMAID_GATEWAY = "http://127.0.0.1:8787"
+
+
+def bridge_config() -> tuple[Path, Path, str]:
+    node_value = os.environ.get("POWERPOINT_LOCAL_MERMAID_NODE") or shutil.which("node") or "/usr/bin/node"
+    default_entry = Path(__file__).resolve().parents[2].parent / "mermaid-studio" / "dist" / "mcp" / "index.js"
+    entry_value = os.environ.get("POWERPOINT_LOCAL_MERMAID_ENTRY") or str(default_entry)
+    gateway = os.environ.get("POWERPOINT_LOCAL_MERMAID_GATEWAY", DEFAULT_MERMAID_GATEWAY)
+    match = re.fullmatch(r"http://(?:127\.0\.0\.1|localhost):([0-9]{1,5})/?", gateway)
+    if match is None or not 1 <= int(match.group(1)) <= 65535:
+        raise ValueError("POWERPOINT_LOCAL_MERMAID_GATEWAY must use localhost or 127.0.0.1.")
+    return Path(node_value).expanduser(), Path(entry_value).expanduser(), gateway
 
 
 def bridge_status() -> dict[str, Any]:
+    node, entry, gateway = bridge_config()
     return {
         "transport": "local_stdio_child_process",
-        "node": str(MERMAID_NODE),
-        "entry": str(MERMAID_ENTRY),
-        "available": MERMAID_NODE.is_file() and MERMAID_ENTRY.is_file(),
-        "gateway": MERMAID_GATEWAY,
+        "node": str(node),
+        "entry": str(entry),
+        "available": node.is_file() and entry.is_file(),
+        "gateway": gateway,
         "boundary": "PowerPoint Local uses only stdio. Mermaid Studio owns its loopback renderer connection.",
     }
 
@@ -44,8 +56,12 @@ def _read_response(process: subprocess.Popen[str], request_id: int, timeout_seco
 
 
 def create_diagram(title: str, source: str, theme: str = "default", scale: int = 4) -> dict[str, Any]:
-    if not MERMAID_NODE.is_file() or not MERMAID_ENTRY.is_file():
-        raise RuntimeError("Local Mermaid Studio MCP is unavailable at its registered local path.")
+    node, entry, gateway = bridge_config()
+    if not node.is_file() or not entry.is_file():
+        raise RuntimeError(
+            "Local Mermaid Studio MCP is unavailable. Set POWERPOINT_LOCAL_MERMAID_NODE "
+            "and POWERPOINT_LOCAL_MERMAID_ENTRY, or place mermaid-studio beside this checkout."
+        )
     if not title or len(title) > 120:
         raise ValueError("title must contain 1–120 characters.")
     if not source or len(source) > 200_000:
@@ -54,8 +70,8 @@ def create_diagram(title: str, source: str, theme: str = "default", scale: int =
         raise ValueError("theme must be one of: default, dark, forest, neutral, base.")
     if not isinstance(scale, int) or not 1 <= scale <= 4:
         raise ValueError("scale must be an integer from 1 to 4.")
-    environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "MCP_API_BASE_URL": MERMAID_GATEWAY}
-    process = subprocess.Popen([str(MERMAID_NODE), str(MERMAID_ENTRY)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=environment)
+    environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "MCP_API_BASE_URL": gateway}
+    process = subprocess.Popen([str(node), str(entry)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=environment)
     try:
         if process.stdin is None:
             raise RuntimeError("Mermaid MCP did not expose stdin.")

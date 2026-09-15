@@ -33,15 +33,32 @@ TOOLS: list[dict[str, Any]] = [
     {"name": "powerpoint_local_plan_deck", "description": "Create a deterministic local deck plan and map slide roles to a local template.", "inputSchema": schema({"source_path": {"type": "string"}, "template_path": {"type": "string"}, "max_slides": {"type": "integer", "minimum": 3, "maximum": 20}}, ["source_path"])},
     {"name": "powerpoint_local_suggest_mermaid", "description": "Suggest Mermaid source for eligible planned architecture, process, and timeline slides. It does not render online.", "inputSchema": schema({"source_path": {"type": "string"}, "plan": {"type": "object"}}, ["source_path"])},
     {"name": "powerpoint_local_create_mermaid_diagram", "description": "Call the registered local Mermaid Studio MCP over stdio to create a local PNG diagram artifact for a planned slide. No remote calls are made by this server.", "inputSchema": schema({"title": {"type": "string", "maxLength": 120}, "source": {"type": "string", "maxLength": 200000}, "theme": {"type": "string", "enum": ["default", "dark", "forest", "neutral", "base"]}, "scale": {"type": "integer", "minimum": 1, "maximum": 4}}, ["title", "source"])},
-    {"name": "powerpoint_local_prepare_deck", "description": "Create an editable local template copy and deck manifest for guided authoring, then optionally open it in PowerPoint.", "inputSchema": schema({"plan": {"type": "object"}, "output_path": {"type": "string"}, "template_path": {"type": "string"}, "open_after": {"type": "boolean"}}, ["plan", "output_path"])},
+    {"name": "powerpoint_local_prepare_deck", "description": "Write a deck manifest; when a local template is supplied, copy it to an editable output and optionally open it in PowerPoint.", "inputSchema": schema({"plan": {"type": "object"}, "output_path": {"type": "string"}, "template_path": {"type": "string"}, "open_after": {"type": "boolean"}}, ["plan", "output_path"])},
     {"name": "powerpoint_local_open", "description": "Open a local PowerPoint file with macOS Automation.", "inputSchema": schema({"file_path": {"type": "string"}}, ["file_path"])},
     {"name": "powerpoint_local_export_pngs", "description": "Ask local Microsoft PowerPoint to export a local deck as PNG slides.", "inputSchema": schema({"file_path": {"type": "string"}, "output_dir": {"type": "string"}}, ["file_path", "output_dir"])},
     {"name": "powerpoint_local_capture_screen", "description": "Capture a local PowerPoint review screenshot after bringing PowerPoint forward.", "inputSchema": schema({"output_path": {"type": "string"}}, ["output_path"])},
 ]
 
+READ_ONLY_TOOLS = {
+    "powerpoint_local_status",
+    "powerpoint_local_find_templates",
+    "powerpoint_local_inspect_template",
+    "powerpoint_local_read_source",
+    "powerpoint_local_plan_deck",
+    "powerpoint_local_suggest_mermaid",
+}
+for tool in TOOLS:
+    read_only = tool["name"] in READ_ONLY_TOOLS
+    tool["annotations"] = {
+        "readOnlyHint": read_only,
+        "destructiveHint": False,
+        "idempotentHint": read_only or tool["name"] == "powerpoint_local_open",
+        "openWorldHint": False,
+    }
+
 
 def status() -> dict[str, Any]:
-    return {"server": SERVER_NAME, "version": VERSION, "local_only": {"network_calls": False, "package_fetching": False, "cloud_api_access": False, "allowed_processes": ["/usr/bin/osascript", "/usr/sbin/screencapture", "/usr/bin/open", "/opt/homebrew/bin/node (fixed local Mermaid MCP bridge)"]}, "powerpoint": powerpoint_version(), "mermaid_bridge": bridge_status(), "template_roots": template_roots(), "metadata_roots": [str(path) for path in metadata_roots()], "permissions": {"automation": "Grant Codex Automation access to Microsoft PowerPoint if a tool fails.", "screen_recording": "Grant Codex Screen Recording access before screenshot capture."}}
+    return {"server": SERVER_NAME, "version": VERSION, "local_only": {"network_calls": False, "package_fetching": False, "cloud_api_access": False, "allowed_processes": ["/usr/bin/osascript", "/usr/sbin/screencapture", "/usr/bin/open", "/usr/bin/sips", "configured local Node executable (Mermaid MCP bridge)"]}, "powerpoint": powerpoint_version(), "mermaid_bridge": bridge_status(), "template_roots": template_roots(), "metadata_roots": [str(path) for path in metadata_roots()], "permissions": {"automation": "Grant Codex Automation access to Microsoft PowerPoint if a tool fails.", "screen_recording": "Grant Codex Screen Recording access before screenshot capture."}}
 
 
 HANDLERS: dict[str, Callable[..., dict[str, Any]]] = {

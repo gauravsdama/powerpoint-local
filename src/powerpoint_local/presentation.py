@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 import zipfile
 from pathlib import Path
@@ -14,6 +15,7 @@ from .local_files import POWERPOINT_EXTENSIONS, ensure_local_file
 P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
 A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 NS = {"p": P_NS, "a": A_NS}
+MINIMUM_POWERPOINT_VERSION = "16.95"
 
 
 def _natural(value: str) -> list[object]:
@@ -77,9 +79,24 @@ def _run_osascript(lines: list[str], arguments: list[str] | None = None) -> str:
 def powerpoint_version() -> dict:
     try:
         version = _run_osascript(['tell application "Microsoft PowerPoint" to return version'])
-        return {"installed": True, "version": version, "automation": "available"}
+        installed_parts = tuple(int(piece) for piece in re.findall(r"\d+", version)[:3])
+        minimum_parts = tuple(int(piece) for piece in MINIMUM_POWERPOINT_VERSION.split("."))
+        installed_parts += (0,) * (len(minimum_parts) - len(installed_parts))
+        return {
+            "installed": True,
+            "version": version,
+            "automation": "available",
+            "minimum_supported_version": MINIMUM_POWERPOINT_VERSION,
+            "supported": installed_parts >= minimum_parts,
+        }
     except RuntimeError as error:
-        return {"installed": Path("/Applications/Microsoft PowerPoint.app").exists(), "automation": "unavailable", "detail": str(error)}
+        return {
+            "installed": Path("/Applications/Microsoft PowerPoint.app").exists(),
+            "automation": "unavailable",
+            "minimum_supported_version": MINIMUM_POWERPOINT_VERSION,
+            "supported": False,
+            "detail": str(error),
+        }
 
 
 def open_in_powerpoint(path_value: str) -> dict:
@@ -91,6 +108,28 @@ def open_in_powerpoint(path_value: str) -> dict:
     time.sleep(2)
     _run_osascript(['tell application "Microsoft PowerPoint" to activate'])
     return {"opened": str(path), "note": "Opened locally in Microsoft PowerPoint."}
+
+
+def _close_presentation(name: str) -> None:
+    _run_osascript([
+        'on run argv',
+        'tell application "Microsoft PowerPoint"',
+        'if exists presentation (item 1 of argv) then close presentation (item 1 of argv) saving no',
+        'end tell',
+        'end run',
+    ], [name])
+
+
+def _create_empty_presentation(output: Path, open_after: bool) -> None:
+    _run_osascript([
+        "on run argv",
+        'tell application "Microsoft PowerPoint"',
+        "set deck to make new presentation",
+        "save deck in (POSIX file (item 1 of argv)) as save as Open XML presentation",
+        'if (item 2 of argv) is "false" then close deck saving no',
+        "end tell",
+        "end run",
+    ], [str(output), "true" if open_after else "false"])
 
 
 def prepare_guided_deck(plan: dict, output_path_value: str, template_path_value: str | None = None, open_after: bool = True) -> dict:
@@ -107,34 +146,92 @@ def prepare_guided_deck(plan: dict, output_path_value: str, template_path_value:
         if open_after:
             open_in_powerpoint(str(output))
     else:
-        _run_osascript(['tell application "Microsoft PowerPoint" to activate'])
-        artifact = {"creation_mode": "guided_empty_presentation", "template": "none"}
+        _create_empty_presentation(output, open_after)
+        artifact = {"deck_path": str(output), "creation_mode": "local_blank_powerpoint", "template": "none"}
     manifest.write_text(json.dumps({"plan": plan, "artifact": artifact, "instructions": [
         "Use the mapped template role for each planned slide.",
         "Replace template placeholders; do not paste long source paragraphs unchanged.",
         "Export PNGs and run a visual review before sharing the deck.",
     ]}, indent=2), encoding="utf-8")
-    return {**artifact, "manifest_path": str(manifest), "note": "The plan and local copy are ready for guided authoring. No network template retrieval was attempted."}
+    if template:
+        note = "The plan and local template copy are ready for guided authoring."
+    else:
+        note = "The plan and a local blank PowerPoint deck are ready for guided authoring."
+    return {**artifact, "manifest_path": str(manifest), "note": f"{note} No network template retrieval was attempted."}
 
 
 def export_pngs(path_value: str, output_dir_value: str) -> dict:
     path = ensure_local_file(path_value, POWERPOINT_EXTENSIONS)
     output_dir = Path(output_dir_value).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    stem = output_dir / "slide.png"
     open_in_powerpoint(str(path))
-    _run_osascript([
-        'on run argv',
-        'tell application "Microsoft PowerPoint"',
-        'set deck to presentation (item 3 of argv)',
-        'save deck in (POSIX file (item 1 of argv)) as save as PNG',
-        'end tell',
-        'end run',
-    ], [str(stem), str(path), path.name])
-    images = sorted(str(item) for item in output_dir.glob("*.png"))
+    images: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="powerpoint-local-direct-export-") as directory:
+        stem = Path(directory) / "slide.png"
+        _run_osascript([
+            'on run argv',
+            'tell application "Microsoft PowerPoint"',
+            'set deck to presentation (item 3 of argv)',
+            'save deck in (POSIX file (item 1 of argv)) as save as PNG',
+            'end tell',
+            'end run',
+        ], [str(stem), str(path), path.name])
+        direct_images = sorted(Path(directory).rglob("*.png"), key=lambda item: _natural(str(item)))
+        for slide_number, direct_image in enumerate(direct_images, start=1):
+            destination = output_dir / f"Slide-{slide_number}.png"
+            shutil.copy2(direct_image, destination)
+            images.append(str(destination))
+    export_mode = "powerpoint_png"
     if not images:
-        raise RuntimeError("PowerPoint completed the PNG export command but produced no PNG files. Keep the deck open in PowerPoint, confirm it is writable, and retry after granting Automation permission.")
-    return {"source": str(path), "output_dir": str(output_dir), "images": images, "count": len(images), "note": "Inspect these local PNGs in Codex for visual review."}
+        export_mode = "powerpoint_pdf_single_slide_fallback"
+        slide_count = len(inspect_template(str(path))["slides"])
+        if slide_count == 0:
+            raise RuntimeError("The presentation contains no slides to export.")
+        with tempfile.TemporaryDirectory(prefix="powerpoint-local-export-") as directory:
+            scratch = Path(directory)
+            for slide_number in range(1, slide_count + 1):
+                working_copy = scratch / f"slide-{slide_number}.pptx"
+                pdf_path = scratch / f"slide-{slide_number}.pdf"
+                png_path = output_dir / f"Slide-{slide_number}.png"
+                shutil.copy2(path, working_copy)
+                completed = subprocess.run(
+                    ["/usr/bin/open", "-a", "Microsoft PowerPoint", str(working_copy)],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                if completed.returncode:
+                    raise RuntimeError(f"PowerPoint launch failed during PNG fallback: {completed.stderr.strip()}")
+                time.sleep(1)
+                try:
+                    _run_osascript([
+                        "on run argv",
+                        'tell application "Microsoft PowerPoint"',
+                        "set deck to presentation (item 4 of argv)",
+                        "set keepSlide to (item 2 of argv) as integer",
+                        "set slideTotal to (item 3 of argv) as integer",
+                        "repeat with slideNumber from slideTotal to 1 by -1",
+                        "if slideNumber is not keepSlide then delete slide slideNumber of deck",
+                        "end repeat",
+                        "save deck in (POSIX file (item 1 of argv)) as save as PDF",
+                        "end tell",
+                        "end run",
+                    ], [str(pdf_path), str(slide_number), str(slide_count), working_copy.name])
+                finally:
+                    _close_presentation(working_copy.name)
+                converted = subprocess.run(
+                    ["/usr/bin/sips", "-s", "format", "png", str(pdf_path), "--out", str(png_path)],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    check=False,
+                )
+                if converted.returncode or not png_path.is_file():
+                    detail = converted.stderr.strip() or converted.stdout.strip() or "sips produced no image"
+                    raise RuntimeError(f"PowerPoint PDF fallback could not render slide {slide_number}: {detail}")
+        images = sorted((str(item) for item in output_dir.glob("Slide-*.png")), key=_natural)
+    return {"source": str(path), "output_dir": str(output_dir), "images": images, "count": len(images), "export_mode": export_mode, "note": "Inspect these local PNGs in Codex for visual review."}
 
 
 def capture_screen(output_path_value: str) -> dict:

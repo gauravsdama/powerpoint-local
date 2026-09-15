@@ -25,8 +25,8 @@ Ship a local-only Codex MCP that turns local documents into stylized PowerPoint 
 - Own state in explicit local artifacts: deck plans and manifests; no hidden global presentation state.
 - Treat a template as usable only after a local file exists. SharePoint hits are `reference_only`.
 - Prefer Oracle candidate templates by filename/layout evidence; otherwise identify the best local candidate and disclose the fallback.
-- Provide a guided editable template copy rather than unreliable hidden PowerPoint content mutation.
-- Invoke Mermaid Studio only through a fixed local stdio child process. PowerPoint Local does not own or make HTTP calls; Mermaid Studio owns its own loopback renderer.
+- Copy a supplied local template for guided editing; without a template, write the manifest and activate PowerPoint rather than claiming hidden content mutation succeeded.
+- Invoke Mermaid Studio only through a configurable local stdio child process. PowerPoint Local rejects non-loopback renderer gateway configuration; Mermaid Studio owns the loopback renderer connection.
 
 ## Performance and UX Guardrails
 
