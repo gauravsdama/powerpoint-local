@@ -6,7 +6,7 @@ Status: **source-ready**. The repository is licensed under Apache-2.0, local tes
 
 - Intended user: a macOS PowerPoint user who wants deterministic local deck planning, local template inspection, and explicit review artifacts through an MCP client.
 - Employer-facing story: a standard-library Python MCP that keeps source documents and Office automation on the Mac, models its privacy boundary in code, and delegates optional diagram rendering to a separately running local Mermaid Studio.
-- Repository: `gauravsdama/powerpoint-local`, private, not a GitHub fork, with one author in the local commit history.
+- Repository: `gauravsdama/powerpoint-local`, public, not a GitHub fork, with one author in the local commit history.
 - Source: first-party Python. Two pinned MIT-licensed repositories were design references only; see [third-party notices](../THIRD_PARTY_NOTICES.md).
 - Interface: stdio MCP only. Microsoft PowerPoint and Mermaid Studio own their respective interfaces, so this repository has no UI copy inventory or project screenshot requirement.
 
@@ -20,6 +20,7 @@ Status: **source-ready**. The repository is licensed under Apache-2.0, local tes
 - A disposable three-slide `.pptx` exercised source reading, template discovery, planning, Mermaid suggestion/rendering, blank-deck creation, inspection, open, PNG export, and screen capture. The deck contained real text and a Mermaid image inserted by Microsoft PowerPoint.
 - PowerPoint 16.95.1 returned success without files for direct AppleScript PNG export. The repaired fallback used PowerPoint-rendered one-slide PDFs plus macOS `sips`, produced three PNGs, and preserved the source deck. Independent and local visual review found no clipping or overlap after enlarging the diagram and aligning slide margins.
 - Local upstream study checkouts match the two commits recorded in `THIRD_PARTY_NOTICES.md`; `upstream/` remains ignored.
+- GitHub Actions run `35034516060` passed the clean-tree unit, MCP handshake, and offline-install workflow. The hosted runner intentionally did not claim live PowerPoint compatibility because PowerPoint is not installed there.
 
 ## Local-only boundary
 
