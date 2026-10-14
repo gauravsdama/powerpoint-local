@@ -37,6 +37,8 @@ def create_plan(source_path: str, template_path: str | None = None, max_slides: 
         if len(slides) >= max_slides - 1:
             break
         heading = section["heading"]
+        if heading.strip().casefold() == source["title"].strip().casefold():
+            continue
         body = _bullets(section["items"])
         lowered = f"{heading} {' '.join(body)}".lower()
         role_name = "comparison" if any(token in lowered for token in ("versus", " vs ", "compare", "before", "after")) else "diagram" if any(token in lowered for token in ("architecture", "workflow", "process", "timeline", "sequence")) else "two_column" if len(body) >= 4 else "content"

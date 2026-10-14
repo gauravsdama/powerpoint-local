@@ -13,8 +13,8 @@ trap 'rm -rf "$install_root"' EXIT HUP INT TERM
 
 cd "$project_root"
 git diff --check
-python3 -m compileall -q src tests
-python3 -m unittest discover -s tests -v
+PYTHONPYCACHEPREFIX="$install_root/pycache" python3 -m compileall -q src tests
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 ./scripts/setup.sh --prefix "$install_root"
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}' | "$install_root/bin/powerpoint-local" | grep -q '"name":"powerpoint-local"'
 

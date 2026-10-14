@@ -3,13 +3,18 @@ from __future__ import annotations
 import json
 import os
 import re
-import select
+import selectors
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
 DEFAULT_MERMAID_GATEWAY = "http://127.0.0.1:8787"
+MERMAID_RESPONSE_TIMEOUT_SECONDS = 90.0
+MERMAID_SHUTDOWN_TIMEOUT_SECONDS = 3.0
+MAX_MERMAID_STDERR_BYTES = 8192
+MAX_MERMAID_RESPONSE_BYTES = 2 * 1024 * 1024
 
 
 def bridge_config() -> tuple[Path, Path, str]:
@@ -35,24 +40,57 @@ def bridge_status() -> dict[str, Any]:
     }
 
 
-def _read_response(process: subprocess.Popen[str], request_id: int, timeout_seconds: int = 90) -> dict[str, Any]:
-    if process.stdout is None:
-        raise RuntimeError("Mermaid MCP did not expose stdout.")
-    remaining = float(timeout_seconds)
-    while remaining > 0:
-        ready, _, _ = select.select([process.stdout], [], [], min(1.0, remaining))
-        remaining -= 1.0
-        if not ready:
-            continue
-        line = process.stdout.readline()
-        if not line:
-            break
-        message = json.loads(line)
-        if message.get("id") == request_id:
-            if "error" in message:
-                raise RuntimeError(f"Mermaid MCP error: {message['error'].get('message', 'unknown error')}")
-            return message["result"]
-    raise RuntimeError("Mermaid MCP did not respond. Start Mermaid Studio locally with `npm run start`, then retry.")
+def _read_response(process: subprocess.Popen[str], request_id: int, timeout_seconds: float) -> dict[str, Any]:
+    if process.stdout is None or process.stderr is None:
+        raise RuntimeError("Mermaid MCP did not expose stdout and stderr.")
+    deadline = time.monotonic() + timeout_seconds
+    stdout_buffer = bytearray()
+    stderr_tail = bytearray()
+    with selectors.DefaultSelector() as selector:
+        selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+        selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            events = selector.select(remaining)
+            if not events:
+                break
+            for key, _ in events:
+                chunk = os.read(key.fileobj.fileno(), 65_536)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                if key.data == "stderr":
+                    stderr_tail.extend(chunk)
+                    if len(stderr_tail) > MAX_MERMAID_STDERR_BYTES:
+                        del stderr_tail[:-MAX_MERMAID_STDERR_BYTES]
+                    continue
+                stdout_buffer.extend(chunk)
+                if len(stdout_buffer) > MAX_MERMAID_RESPONSE_BYTES:
+                    raise RuntimeError("Mermaid MCP response exceeded the 2097152-byte limit.")
+                while b"\n" in stdout_buffer:
+                    raw_line, _, remainder = stdout_buffer.partition(b"\n")
+                    stdout_buffer = bytearray(remainder)
+                    try:
+                        message = json.loads(raw_line.decode("utf-8"))
+                    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                        raise RuntimeError("Mermaid MCP emitted an invalid JSON-RPC message.") from error
+                    if message.get("id") == request_id:
+                        if "error" in message:
+                            detail = message["error"].get("message", "unknown error")
+                            raise RuntimeError(f"Mermaid MCP error: {detail}")
+                        if "result" not in message:
+                            raise RuntimeError("Mermaid MCP response did not contain a result.")
+                        return message["result"]
+            if process.poll() is not None and not selector.get_map():
+                break
+    detail = stderr_tail.decode("utf-8", errors="replace").strip()
+    suffix = f" Child stderr: {detail}" if detail else ""
+    raise RuntimeError(
+        "Mermaid MCP did not respond before the deadline. "
+        "Start Mermaid Studio locally with `npm run start`, then retry." + suffix
+    )
 
 
 def create_diagram(title: str, source: str, theme: str = "default", scale: int = 4) -> dict[str, Any]:
@@ -77,11 +115,11 @@ def create_diagram(title: str, source: str, theme: str = "default", scale: int =
             raise RuntimeError("Mermaid MCP did not expose stdin.")
         process.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "powerpoint-local", "version": "0.1.0"}}}) + "\n")
         process.stdin.flush()
-        _read_response(process, 1)
+        _read_response(process, 1, MERMAID_RESPONSE_TIMEOUT_SECONDS)
         process.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}) + "\n")
         process.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "mermaid_studio_create_diagram", "arguments": {"title": title, "source": source, "theme": theme, "scale": scale, "response_format": "json"}}}) + "\n")
         process.stdin.flush()
-        result = _read_response(process, 2)
+        result = _read_response(process, 2, MERMAID_RESPONSE_TIMEOUT_SECONDS)
         if result.get("isError"):
             message = result.get("content", [{}])[0].get("text", "Mermaid Studio could not create the diagram.")
             raise RuntimeError(message)
@@ -90,8 +128,18 @@ def create_diagram(title: str, source: str, theme: str = "default", scale: int =
             raise RuntimeError("Mermaid Studio returned no local PNG artifact path.")
         return {"artifact": artifact, "bridge": bridge_status()}
     finally:
-        process.terminate()
+        if process.stdin is not None:
+            try:
+                process.stdin.close()
+            except OSError:
+                pass
+        if process.poll() is None:
+            process.terminate()
         try:
-            process.wait(timeout=3)
+            process.wait(timeout=MERMAID_SHUTDOWN_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             process.kill()
+            process.wait(timeout=MERMAID_SHUTDOWN_TIMEOUT_SECONDS)
+        for pipe in (process.stdout, process.stderr):
+            if pipe is not None:
+                pipe.close()

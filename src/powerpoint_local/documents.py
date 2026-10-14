@@ -7,7 +7,9 @@ from xml.etree import ElementTree as ET
 
 from .local_files import SOURCE_EXTENSIONS, ensure_local_file
 
-MAX_SOURCE_CHARS = 250_000
+MAX_SOURCE_BYTES = 250 * 1024
+MAX_DOCX_PACKAGE_BYTES = 64 * 1024 * 1024
+MAX_DOCX_XML_BYTES = 2 * 1024 * 1024
 WORD_NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
 
 
@@ -15,10 +17,42 @@ def _clean(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+def _read_bounded_file(path: Path) -> str:
+    with path.open("rb") as source:
+        content = source.read(MAX_SOURCE_BYTES + 1)
+    if len(content) > MAX_SOURCE_BYTES:
+        raise ValueError(f"Source file exceeds the {MAX_SOURCE_BYTES}-byte limit: {path}")
+    return content.decode("utf-8", errors="ignore")
+
+
+def _read_bounded_zip_member(archive: zipfile.ZipFile, name: str, limit: int) -> bytes:
+    try:
+        member = archive.getinfo(name)
+    except KeyError as error:
+        raise ValueError(f"DOCX is missing required member: {name}") from error
+    if member.file_size > limit:
+        raise ValueError(f"DOCX member {name} exceeds the {limit}-byte uncompressed limit.")
+    with archive.open(member) as source:
+        content = source.read(limit + 1)
+    if len(content) > limit:
+        raise ValueError(f"DOCX member {name} exceeds the {limit}-byte uncompressed limit.")
+    return content
+
+
 def _read_docx(path: Path) -> list[tuple[str, int | None]]:
-    with zipfile.ZipFile(path) as archive:
-        xml = archive.read("word/document.xml")
-    root = ET.fromstring(xml)
+    if path.stat().st_size > MAX_DOCX_PACKAGE_BYTES:
+        raise ValueError(f"DOCX package exceeds the {MAX_DOCX_PACKAGE_BYTES}-byte limit.")
+    try:
+        with zipfile.ZipFile(path) as archive:
+            if len(archive.infolist()) > 10_000:
+                raise ValueError("DOCX contains too many ZIP members.")
+            xml = _read_bounded_zip_member(archive, "word/document.xml", MAX_DOCX_XML_BYTES)
+    except zipfile.BadZipFile as error:
+        raise ValueError(f"Invalid DOCX ZIP package: {path}") from error
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError as error:
+        raise ValueError("DOCX document.xml contains invalid XML.") from error
     paragraphs: list[tuple[str, int | None]] = []
     for paragraph in root.findall(".//w:p", WORD_NS):
         text = _clean("".join(node.text or "" for node in paragraph.findall(".//w:t", WORD_NS)))
@@ -33,7 +67,7 @@ def _read_docx(path: Path) -> list[tuple[str, int | None]]:
 
 def _read_markdown(path: Path) -> list[tuple[str, int | None]]:
     result: list[tuple[str, int | None]] = []
-    for raw in path.read_text(encoding="utf-8", errors="ignore")[:MAX_SOURCE_CHARS].splitlines():
+    for raw in _read_bounded_file(path).splitlines():
         match = re.match(r"^(#{1,6})\s+(.+)$", raw.strip())
         if match:
             result.append((_clean(match.group(2)), len(match.group(1))))
@@ -43,7 +77,7 @@ def _read_markdown(path: Path) -> list[tuple[str, int | None]]:
 
 
 def _read_text(path: Path) -> list[tuple[str, int | None]]:
-    return [(_clean(value), None) for value in path.read_text(encoding="utf-8", errors="ignore")[:MAX_SOURCE_CHARS].splitlines() if _clean(value)]
+    return [(_clean(value), None) for value in _read_bounded_file(path).splitlines() if _clean(value)]
 
 
 def read_source(path_value: str) -> dict:

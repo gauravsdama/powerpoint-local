@@ -10,7 +10,7 @@
 - Inspects template layouts and maps plan roles to locally available layouts, preferring Oracle-branded templates.
 - Suggests Mermaid source for process, architecture, and timeline slides.
 - Calls the local Mermaid Studio MCP over stdio to turn approved Mermaid source into a local PNG artifact for a planned slide.
-- Creates a local editable template copy or blank `.pptx` plus a deck manifest for guided authoring, opens PowerPoint locally, exports slide PNGs, and captures a local screenshot for visual review.
+- Creates a new local editable `.pptx` copy or blank `.pptx` plus a deck manifest for guided authoring, opens PowerPoint locally, exports slide PNGs into a new directory, and captures a new local screenshot for visual review.
 
 ## Local-only boundary
 
@@ -44,7 +44,11 @@ A useful first workflow is:
 3. Call `powerpoint_local_plan_deck` to produce a deterministic plan.
 4. Review the plan before calling `powerpoint_local_prepare_deck` with an output path.
 
-When a local template is supplied, the server creates an editable copy plus a manifest for guided authoring. Without a template, it asks PowerPoint to create and save a blank local `.pptx` at the requested path. It does not synthesize a finished presentation from arbitrary prose.
+When a local `.pptx` is supplied, the server creates an editable copy plus a manifest for guided authoring. `.potx` must first be converted explicitly in PowerPoint. `.pptm` and `.potm` are not converted because retaining or removing macros is an owner policy decision. Without a template, the server asks PowerPoint to create and save a blank local `.pptx` at the requested path. It does not synthesize a finished presentation from arbitrary prose.
+
+Artifact-producing tools never overwrite or merge with existing paths. Choose a new deck path, export directory, or screenshot path for each call. Deck preparation reports the deck and manifest it owns; PNG export owns the entire newly created output directory. Failed PNG exports leave no partially published output directory.
+
+Plain Markdown and text sources are limited to 250 KiB. DOCX packages are limited to 64 MiB, and DOCX and PowerPoint inspection also bound ZIP member counts and uncompressed XML sizes. MCP requests are limited to 1 MiB, and Mermaid responses are limited to 2 MiB. Oversized input is rejected rather than silently truncated.
 
 Run the local tests without installing anything:
 
@@ -54,6 +58,8 @@ Run the local tests without installing anything:
 
 Use `./scripts/release_check.sh` for the tests, offline-install smoke test, privacy/path guards, and MCP handshake in one command.
 
+`./scripts/setup_macos.sh --test --yes` runs the repository's explicit `tests` directory. It fails instead of reporting success when no Python test directory exists.
+
 ## Permission fixes
 
 If a tool reports an automation or capture failure, enable these for the process that starts Codex (normally Codex or ChatGPT):
@@ -61,6 +67,8 @@ If a tool reports an automation or capture failure, enable these for the process
 1. **System Settings → Privacy & Security → Automation**: allow it to control Microsoft PowerPoint.
 2. **System Settings → Privacy & Security → Screen Recording**: allow it to capture a review screenshot.
 3. Quit and reopen Codex after changing either permission.
+
+PowerPoint may also ask once for access to the local destination folder used for a new deck or export. Grant only the folder you selected. PowerPoint-facing transaction files stay beside the requested artifact so the app does not repeatedly request access to private temporary subfolders, and those files are removed after success or failure.
 
 `powerpoint_local_status` exposes the PowerPoint version and the exact local roots searched.
 

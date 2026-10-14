@@ -90,7 +90,14 @@ if $test_project; then
   [[ -f package.json ]] && npm run test --if-present
   [[ -f Package.swift ]] && swift test
   if [[ -f pyproject.toml || -f requirements.txt ]]; then
-    [[ -x .venv/bin/pytest ]] && .venv/bin/pytest || python3 -m unittest discover -v
+    if [[ -x .venv/bin/pytest ]]; then
+      PYTHONDONTWRITEBYTECODE=1 .venv/bin/pytest
+    elif [[ -d tests ]]; then
+      PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+    else
+      printf '%s\n' 'No Python test directory was found; refusing to report a test pass.' >&2
+      exit 1
+    fi
   fi
 fi
 
