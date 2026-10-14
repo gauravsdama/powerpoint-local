@@ -22,7 +22,7 @@ Status: **source-ready**. The repository is licensed under Apache-2.0, local tes
 - A malformed presentation failed without publishing its output directory or leaving transaction files, and PowerPoint remained usable with the valid deck open. A denied system destination left no deck. A malformed Mermaid request returned a bounded parser error and left the Mermaid child-process set unchanged.
 - No second non-system macOS account is present on this Mac. The disposable offline install proves that the package does not depend on files inside this checkout, but it does not substitute for the clean-account or second-Mac release check.
 - Local upstream study checkouts match the two commits recorded in `THIRD_PARTY_NOTICES.md`; `upstream/` remains ignored.
-- The most recent hosted workflow on the current remote passed before these local changes. A new hosted run is required after the release commit is pushed; the runner intentionally cannot claim live PowerPoint compatibility because PowerPoint is not installed there.
+- GitHub Actions run `38638110667` passed commit `bbc5929`; the hosted runner intentionally cannot claim live PowerPoint compatibility because PowerPoint is not installed there.
 
 ## Local-only boundary
 
